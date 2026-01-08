@@ -40,13 +40,13 @@ class AutonomousVehicle:
         print("\nEquipping sensor suite...")
         
         self.sensors['front_narrow'] = self._add_camera(
-            x=2.5, y=0.0, z=1.0, pitch=-10, yaw=0, roll=0,
+            x=2.5, y=0.0, z=1.0, pitch=0, yaw=0, roll=0,
             fov=50, image_x=1920, image_y=1080,
             name="Front Narrow (50° - Traffic Lights)"
         )
         
         self.sensors['front_wide'] = self._add_camera(
-            x=2.5, y=0.0, z=1.0, pitch=-10, yaw=0, roll=0,
+            x=2.5, y=0.0, z=1.0, pitch=0, yaw=0, roll=0,
             fov=120, image_x=1920, image_y=1080,
             name="Front Wide (120° - Close Range)"
         )
