@@ -21,12 +21,12 @@ import uvicorn
 class YOLOPredictor:
     def __init__(self):
         self.model = YOLO('yolo11x.pt')
-        logger.info("✅ YOLO model loaded successfully")
+        logger.info("YOLO model loaded successfully")
     
     def predict_image(self, image_path: str, from_name: str, to_name: str):
         """Run YOLO prediction and format for Label Studio"""
         
-        logger.info(f"🔍 Processing: {image_path}")
+        logger.info(f"Processing: {image_path}")
         
         try:
             # Run YOLO
@@ -68,11 +68,11 @@ class YOLOPredictor:
                         "type": "rectanglelabels"
                     })
             
-            logger.info(f"✅ Found {len(pred_result)} traffic signals")
+            logger.info(f"Found {len(pred_result)} traffic signals")
             return pred_result
             
         except Exception as e:
-            logger.error(f"❌ Error: {e}", exc_info=True)
+            logger.error(f"Error: {e}", exc_info=True)
             return []
 
 
@@ -150,7 +150,7 @@ async def predict(request: Request):
     tasks = data.get('tasks', [])
     label_config = data.get('label_config', '')
     
-    logger.info(f"📥 Received {len(tasks)} tasks")
+    logger.info(f"Received {len(tasks)} tasks")
     
     # Parse label config
     from_name, to_name, value = parse_label_config(label_config)
@@ -183,7 +183,7 @@ async def predict(request: Request):
             rel_path = image_url.replace('/data/upload/', '').replace('/', '\\')
             image_path = str(label_studio_base / 'media' / 'upload' / rel_path)
             
-            logger.info(f"🔄 Converted URL to path: {image_url} -> {image_path}")
+            logger.info(f"Converted URL to path: {image_url} -> {image_path}")
         else:
             image_path = image_url
         
@@ -203,7 +203,7 @@ async def predict(request: Request):
         "results": predictions
     }
     
-    logger.info(f"📤 Returning {len(predictions)} predictions")
+    logger.info(f"Returning {len(predictions)} predictions")
     
     return response
 
@@ -216,22 +216,22 @@ async def webhook(request: Request):
 
 if __name__ == "__main__":
     print("\n" + "=" * 70)
-    print("🚀 YOLO ML Backend Server")
+    print("YOLO ML Backend Server")
     print("=" * 70)
-    print(f"📂 Project: {PROJECT_ROOT}")
-    print(f"🖼️  Images: {PROJECT_ROOT / 'images'}")
-    print(f"🤖 Model: YOLOv11n (COCO pretrained)")
-    print(f"🎯 Target: Traffic lights (class 9)")
-    print(f"🌐 Server: http://localhost:9090")
-    print(f"🔗 Health: http://localhost:9090/health")
+    print(f"Project: {PROJECT_ROOT}")
+    print(f"Images: {PROJECT_ROOT / 'images'}")
+    print(f"Model: YOLOv11n (COCO pretrained)")
+    print(f"Target: Traffic lights (class 9)")
+    print(f"Server: http://localhost:9090")
+    print(f"Health: http://localhost:9090/health")
     print("=" * 70)
-    print("📝 Endpoints:")
+    print("Endpoints:")
     print("   GET  /         - Server info")
     print("   GET  /health   - Health check")
     print("   POST /setup    - Setup model")
     print("   POST /predict  - Get predictions")
     print("=" * 70)
-    print("\n✅ Server starting...\n")
+    print("\nServer starting...\n")
     
     uvicorn.run(
         app,
