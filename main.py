@@ -9,9 +9,7 @@ from control.pid_controller import PIDController
 from planning.route_planner import RoutePlanner
 from planning.waypoint_manager import WaypointManager
 from utils.carla_utils import (
-    draw_heading_arrow,
     draw_next_waypoints,
-    draw_route,
     get_ego_state,
     normalize_angle,
     output_to_throttle_brake,
@@ -58,7 +56,6 @@ def main():
 
     spectator = world.get_spectator()
 
-    draw_route(world, route)
     logger = RunLogger()
     print(f"Logging to {logger.path}")
 
@@ -98,11 +95,7 @@ def main():
 
                 draw_next_waypoints(
                     world, route, waypoint_manager.current_idx,
-                    n=5, life_time=config.DT * 2,
-                )
-                draw_heading_arrow(
-                    world, vehicle.get_location(), ego.yaw_rad,
-                    life_time=config.DT * 2,
+                    n=20, life_time=config.DT * 2,
                 )
                 logger.log(
                     ego_x=ego.x, ego_y=ego.y,

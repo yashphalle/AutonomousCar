@@ -56,8 +56,8 @@ def draw_next_waypoints(
     world,
     route,
     current_idx: int,
-    n: int = 5,
-    life_time: float = 0.1,
+    n: int = 50,
+    life_time: float = 1,
 ) -> None:
     end_idx = min(current_idx + n, len(route))
     for offset, idx in enumerate(range(current_idx, end_idx)):
@@ -67,36 +67,13 @@ def draw_next_waypoints(
             size = 0.18
         else:
             color = carla.Color(255, 0, 0)
-            size = 0.12
+            size = 0.06
         world.debug.draw_point(
             carla.Location(x=loc.x, y=loc.y, z=loc.z + 0.5),
             size=size,
             color=color,
             life_time=life_time,
         )
-
-
-def draw_heading_arrow(
-    world,
-    ego_location,
-    ego_yaw_rad: float,
-    length: float = 3.0,
-    life_time: float = 0.1,
-) -> None:
-    begin = carla.Location(x=ego_location.x, y=ego_location.y, z=ego_location.z + 0.5)
-    end = carla.Location(
-        x=ego_location.x + length * math.cos(ego_yaw_rad),
-        y=ego_location.y + length * math.sin(ego_yaw_rad),
-        z=ego_location.z + 0.5,
-    )
-    world.debug.draw_arrow(
-        begin,
-        end,
-        thickness=0.08,
-        arrow_size=0.2,
-        color=carla.Color(0, 100, 255),
-        life_time=life_time,
-    )
 
 
 @contextmanager
