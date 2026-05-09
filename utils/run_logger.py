@@ -11,6 +11,7 @@ class RunLogger:
         "heading_error", "speed_error",
         "steer", "throttle", "brake",
         "current_idx",
+        "planner_reason", "nearest_tl_state", "nearest_tl_dist_m", "nearest_obj_dist_m",
     ]
 
     def __init__(self, log_dir: str = "logs"):
@@ -38,6 +39,10 @@ class RunLogger:
         throttle: float,
         brake: float,
         current_idx: int,
+        planner_reason: str = "",
+        nearest_tl_state: str = "",
+        nearest_tl_dist_m: float = -1.0,
+        nearest_obj_dist_m: float = -1.0,
     ) -> None:
         self._frame += 1
         self._writer.writerow([
@@ -56,6 +61,10 @@ class RunLogger:
             f"{throttle:.4f}",
             f"{brake:.4f}",
             current_idx,
+            planner_reason,
+            nearest_tl_state,
+            f"{nearest_tl_dist_m:.1f}",
+            f"{nearest_obj_dist_m:.1f}",
         ])
         self._file.flush()
 

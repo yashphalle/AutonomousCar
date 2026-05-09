@@ -30,3 +30,9 @@ if _carla_root is None:
 _agents_path = os.path.join(_carla_root, "PythonAPI", "carla")
 if _agents_path not in sys.path:
     sys.path.insert(0, _agents_path)
+
+# Add the dist/ folder so the carla .egg/.whl is importable without pip install.
+_dist_path = os.path.join(_carla_root, "PythonAPI", "carla", "dist")
+for _egg in sorted(glob.glob(os.path.join(_dist_path, "carla-*.egg"))):
+    if _egg not in sys.path:
+        sys.path.insert(0, _egg)

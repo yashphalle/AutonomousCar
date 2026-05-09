@@ -1,0 +1,11 @@
+route_id,label,completion_pct,collisions,planner_fault_collisions,red_light_violations,mean_speed_mps,mean_jerk,time_s,timeout
+1,long_straight_low_traffic,100.0,0,0,0,5.57,23.971,120.03,True
+2,long_straight_opposite,100.0,0,0,0,4.949,28.939,102.18,False
+3,multi_junction,100.0,0,0,0,3.074,24.405,120.0,True
+4,single_traffic_light,100.0,0,0,0,3.305,36.894,114.12,False
+5,cross_town_diagonal,69.51,0,0,0,3.24,37.487,120.03,True
+6,dense_npc_cluster,100.0,0,0,0,4.764,28.611,79.94,False
+7,bridge_speed_limit,100.0,0,0,0,4.228,33.163,60.54,False
+8,left_turn_opposing_traffic,100.0,0,0,0,5.166,29.671,79.93,False
+9,long_endurance,59.38,0,0,0,4.881,32.272,120.02,True
+10,short_loop,100.0,0,0,0,2.613,41.418,120.03,True

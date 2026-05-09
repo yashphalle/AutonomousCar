@@ -1,0 +1,20 @@
+=== Stage 2 Baseline — GT Perception ===
+Seed: 42   Routes: 10   Date: 2026-05-09
+
+Aggregate:
+  Routes completed (no timeout): 5/10
+  Total collisions: 0
+  Planner-fault collisions: 0
+  Red-light violations: 0
+  Mean speed (m/s): 4.18
+  Mean jerk: 31.68
+
+Reason histogram (% of ticks):
+  cruise                   2.8%
+  red_light_stop          57.3%
+  yellow_stop              2.3%
+  yellow_continue          0.0%
+  lead_vehicle             0.6%
+  junction_speed_cap      12.6%
+  emergency_brake          0.0%
+  speed_limit             24.4%  (unrecognised reason)

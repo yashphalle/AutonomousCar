@@ -17,6 +17,8 @@ from utils.carla_utils import (
 )
 from utils.run_logger import RunLogger
 from vehicle.autonomous_vehicle import AutonomousVehicle
+from perception.gt_perception import GTPerception
+from planning.planner import RuleBasedPlanner, PlannerConfig
 
 
 def main():
@@ -47,6 +49,9 @@ def main():
         slow_down_floor_speed=config.SLOW_DOWN_FLOOR_SPEED,
     )
 
+    gt_perception = GTPerception(world, vehicle)
+    planner = RuleBasedPlanner(PlannerConfig(cruise_speed_mps=config.TARGET_SPEED))
+
     lateral_pid = PIDController(
         *config.LATERAL_PID, dt=config.DT, integral_limit=config.INTEGRAL_LIMIT
     )
@@ -66,6 +71,9 @@ def main():
 
                 ego = get_ego_state(vehicle)
                 waypoint_manager.update(ego.x, ego.y)
+                scene_state = gt_perception.update(full_route=route, current_idx=waypoint_manager.current_idx)
+                speed_profile = planner.plan(scene_state)
+                waypoint_manager.set_speed_profile(speed_profile)
 
                 if waypoint_manager.goal_distance(ego.x, ego.y) < config.GOAL_REACHED_THRESHOLD_M:
                     print("Goal reached.")
@@ -93,6 +101,24 @@ def main():
                     carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
                 )
 
+                # --- Status print every 1 s (20 ticks at 20 Hz) ---------------
+                nearest_tl = min(scene_state.traffic_lights, key=lambda t: t.distance_m, default=None)
+                nearest_obj = min(scene_state.dynamic_objects, key=lambda o: o.distance_m, default=None)
+                if logger._frame % 20 == 0:
+                    tl_str = (
+                        f"TL {nearest_tl.state.value.upper()} {nearest_tl.distance_m:.1f}m"
+                        if nearest_tl else "TL none"
+                    )
+                    obj_str = (
+                        f"OBJ {nearest_obj.object_class} {nearest_obj.distance_m:.1f}m"
+                        if nearest_obj else "OBJ none"
+                    )
+                    print(
+                        f"[{logger._frame:5d}] {speed_profile.reason:<22s} "
+                        f"spd={ego.speed*3.6:5.1f}km/h tgt={target_speed*3.6:5.1f}km/h "
+                        f"wp={waypoint_manager.current_idx:4d}  {tl_str}  {obj_str}"
+                    )
+
                 draw_next_waypoints(
                     world, route, waypoint_manager.current_idx,
                     n=20, life_time=config.DT * 2,
@@ -104,6 +130,10 @@ def main():
                     heading_error=heading_error, speed_error=speed_error,
                     steer=steer, throttle=throttle, brake=brake,
                     current_idx=waypoint_manager.current_idx,
+                    planner_reason=speed_profile.reason,
+                    nearest_tl_state=nearest_tl.state.value if nearest_tl else "",
+                    nearest_tl_dist_m=nearest_tl.distance_m if nearest_tl else -1.0,
+                    nearest_obj_dist_m=nearest_obj.distance_m if nearest_obj else -1.0,
                 )
 
                 vt = vehicle.get_transform()

@@ -18,6 +18,10 @@ class WaypointManager:
         self.slow_down_dist_m = slow_down_dist_m
         self.slow_down_floor = slow_down_floor_speed
         self.current_idx = 0
+        self._speed_profile = None
+
+    def set_speed_profile(self, profile) -> None:
+        self._speed_profile = profile
 
     def update(self, ego_x: float, ego_y: float) -> None:
         # Window-search rather than "advance if next is closer": at junctions
@@ -52,11 +56,23 @@ class WaypointManager:
 
         # Taper near the goal so the car doesn't overshoot the final waypoint.
         goal_dist = self.goal_distance(ego_x, ego_y)
-        if goal_dist < self.slow_down_dist_m:
-            ratio = max(0.0, goal_dist / self.slow_down_dist_m)
-            target_speed = max(self.slow_down_floor, self.target_speed * ratio)
+        if self._speed_profile is not None:
+            offset = idx - self.current_idx
+            speeds = self._speed_profile.target_speeds_mps
+            profile_speed = speeds[min(offset, len(speeds) - 1)] if speeds else self.target_speed
+            # still apply goal-approach taper on top of profile speed
+            if goal_dist < self.slow_down_dist_m:
+                ratio = max(0.0, goal_dist / self.slow_down_dist_m)
+                target_speed = max(self.slow_down_floor, profile_speed * ratio)
+            else:
+                target_speed = profile_speed
         else:
-            target_speed = self.target_speed
+            # original Stage 1 taper logic (unchanged)
+            if goal_dist < self.slow_down_dist_m:
+                ratio = max(0.0, goal_dist / self.slow_down_dist_m)
+                target_speed = max(self.slow_down_floor, self.target_speed * ratio)
+            else:
+                target_speed = self.target_speed
 
         return loc.x, loc.y, target_speed, road_option
 
