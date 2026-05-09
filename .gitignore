@@ -3,3 +3,6 @@
 *.jpeg
 *.pt
 /Carla Data
+*.claude
+logs/
+__pycache__/
