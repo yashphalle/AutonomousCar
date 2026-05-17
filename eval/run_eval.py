@@ -32,9 +32,12 @@ from control.pid_controller import PIDController
 from eval.routes import EVAL_ROUTES, EvalRoute
 from perception.gt_perception import GTPerception
 from perception.scene_state import TrafficLightState
+from planning.behaviour_planner import BehaviourPlanner, BehaviourConfig
 from planning.planner import RuleBasedPlanner, PlannerConfig
+from planning.planner_output import PlannerOutput
 from planning.route_planner import RoutePlanner
 from planning.waypoint_manager import WaypointManager
+from planning.lane_aware_waypoint_manager import LaneAwareWaypointManager
 from utils.carla_utils import get_ego_state, normalize_angle, output_to_throttle_brake
 from utils.run_logger import RunLogger
 
@@ -357,16 +360,18 @@ def run_route(
     # ------------------------------------------------------------------
     # Stack components
     # ------------------------------------------------------------------
-    waypoint_manager = WaypointManager(
+    _wm = WaypointManager(
         computed_route,
         target_speed=config.TARGET_SPEED,
         search_window=config.WAYPOINT_SEARCH_WINDOW,
         slow_down_dist_m=config.SLOW_DOWN_DIST_M,
         slow_down_floor_speed=config.SLOW_DOWN_FLOOR_SPEED,
     )
+    waypoint_manager = LaneAwareWaypointManager(_wm)
 
     gt_perception = GTPerception(world, vehicle)
     planner = RuleBasedPlanner(PlannerConfig(cruise_speed_mps=config.TARGET_SPEED))
+    behaviour_planner = BehaviourPlanner(BehaviourConfig(cruise_speed_mps=config.TARGET_SPEED))
 
     lateral_pid = PIDController(
         *config.LATERAL_PID, dt=config.DT, integral_limit=config.INTEGRAL_LIMIT
@@ -427,7 +432,11 @@ def run_route(
                 current_idx=waypoint_manager.current_idx,
             )
 
-            # Planning
+            # Behaviour planning (FSM + ACC + lane change)
+            planner_out = behaviour_planner.plan(scene_state)
+            waypoint_manager.set_lane_offset(planner_out.target_lane_offset)
+
+            # Safety override (red light, emergency brake — always runs)
             speed_profile = planner.plan(scene_state)
 
             # Pass speed profile back to waypoint manager so get_lookahead
@@ -530,6 +539,8 @@ def run_route(
                 nearest_tl_dist_m=nearest_tl_dist,
                 nearest_lead_dist_m=nearest_lead_dist,
                 completion_pct=completion_pct,
+                fsm_state=planner_out.fsm_state,
+                lane_offset_m=planner_out.target_lane_offset,
             )
 
     except Exception as exc:
@@ -644,7 +655,7 @@ def write_summary_txt(
     reason_keys = [
         "cruise", "speed_limit", "junction_speed_cap",
         "lead_vehicle", "yellow_stop", "yellow_continue",
-        "red_light_stop", "emergency_brake",
+        "red_light_stop", "emergency_brake", "lane_follow",
     ]
 
     lines = [
@@ -691,6 +702,8 @@ class EvalRunLogger(RunLogger):
         "nearest_tl_dist_m",
         "nearest_lead_dist_m",
         "completion_pct",
+        "fsm_state",        # NEW
+        "lane_offset_m",    # NEW
     ]
 
     def __init__(self, log_dir: str = "logs"):
@@ -726,6 +739,8 @@ class EvalRunLogger(RunLogger):
         nearest_tl_dist_m: float = float("nan"),
         nearest_lead_dist_m: float = float("nan"),
         completion_pct: float = 0.0,
+        fsm_state: str = "",
+        lane_offset_m: float = 0.0,
     ) -> None:
         self._frame += 1
         nan_str = lambda v: "" if math.isnan(v) else f"{v:.3f}"
@@ -751,6 +766,8 @@ class EvalRunLogger(RunLogger):
             nan_str(nearest_tl_dist_m),
             nan_str(nearest_lead_dist_m),
             f"{completion_pct:.2f}",
+            fsm_state,
+            f"{lane_offset_m:.4f}",
         ])
         self._file.flush()
 

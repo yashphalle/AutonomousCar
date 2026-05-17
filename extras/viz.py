@@ -52,7 +52,9 @@ _CARLA_TL_STATE_MAP.update({
     carla.TrafficLightState.Off:     TrafficLightState.OFF,
     carla.TrafficLightState.Unknown: TrafficLightState.UNKNOWN,
 })
+from planning.behaviour_planner import BehaviourPlanner, BehaviourConfig
 from planning.planner import PlannerConfig, RuleBasedPlanner, SpeedProfile
+from planning.planner_output import PlannerOutput
 from planning.route_planner import RoutePlanner
 
 try:
@@ -250,7 +252,12 @@ class CARLAVisualizer:
 
         print("[viz] Setup complete — Rerun viewer should open.")
 
-    def update(self, scene_state: SceneState, speed_profile: SpeedProfile) -> None:
+    def update(
+        self,
+        scene_state: SceneState,
+        speed_profile: SpeedProfile,
+        planner_out: "PlannerOutput | None" = None,
+    ) -> None:
         """Log one frame of dynamic data to Rerun."""
         ts = scene_state.timestamp_s
         rr.set_time("sim_time", duration=ts)
@@ -263,8 +270,8 @@ class CARLAVisualizer:
         self._log_lidar(scene_state.ego_pose)
         self._log_bev_frame(scene_state)
         self._log_tl_debug(scene_state)
-        self._log_scalars(scene_state, speed_profile)
-        self._log_planner_text(scene_state, speed_profile)
+        self._log_scalars(scene_state, speed_profile, planner_out)
+        self._log_planner_text(scene_state, speed_profile, planner_out)
 
         self._frame += 1
 
@@ -542,19 +549,25 @@ class CARLAVisualizer:
 
         if state.dynamic_objects:
             centers_b, half_b, quats_b, colors_b, labels_b = [], [], [], [], []
+            lead_id = state.lead_vehicle_id
             for obj in state.dynamic_objects:
                 bx, by = _world_to_bev(obj.x, obj.y, ego)
-                # Object yaw relative to ego
                 rel_yaw = obj.yaw_rad - ego.yaw_rad
                 q = _yaw_to_quat(rel_yaw)
                 rr_q = rr.Quaternion(xyzw=[q[1], q[2], q[3], q[0]])
                 hs = _VEHICLE_HALF if obj.object_class == "vehicle" else _PEDESTRIAN_HALF
+                is_lead = (obj.id == lead_id)
                 centers_b.append([bx, by, hs[2]])
                 half_b.append(hs)
                 quats_b.append(rr_q)
-                colors_b.append([30, 100, 255, 220] if obj.object_class == "vehicle"
-                                 else [255, 140, 0, 220])
-                labels_b.append(f"{obj.object_class[:3]} {obj.speed_mps:.0f}m/s")
+                if is_lead:
+                    colors_b.append([255, 140, 0, 240])
+                elif obj.object_class == "vehicle":
+                    colors_b.append([30, 100, 255, 220])
+                else:
+                    colors_b.append([255, 140, 0, 220])
+                lead_tag = " [LEAD]" if is_lead else ""
+                labels_b.append(f"{obj.object_class[:3]}{lead_tag} {obj.speed_mps:.0f}m/s")
             rr.log("bev/objects", rr.Boxes3D(
                 centers=centers_b, half_sizes=half_b,
                 quaternions=quats_b, colors=colors_b, labels=labels_b, radii=0.03,
@@ -1049,7 +1062,7 @@ class CARLAVisualizer:
             )
 
     def _log_objects(self, state: SceneState) -> None:
-        """Batch-log all dynamic objects (vehicles + pedestrians)."""
+        """Batch-log all dynamic objects (vehicles + pedestrians). Lead vehicle shown in orange."""
         objects: List[DetectedObject] = state.dynamic_objects
         if not objects:
             rr.log("world/objects", rr.Clear(recursive=False))
@@ -1061,22 +1074,26 @@ class CARLAVisualizer:
         colors = []
         labels = []
 
+        lead_id = state.lead_vehicle_id
+
         for obj in objects:
             cx, cy, cz = _c2r(obj.x, obj.y, state.ego_pose.z + 0.75)
             centers.append([cx, cy, cz])
 
+            is_lead = (obj.id == lead_id)
             if obj.object_class == "vehicle":
                 half_sizes.append(_VEHICLE_HALF)
-                colors.append([30, 100, 255, 200])
+                colors.append([255, 140, 0, 240] if is_lead else [30, 100, 255, 200])
             else:
                 half_sizes.append(_PEDESTRIAN_HALF)
-                colors.append([255, 140, 0, 220])
+                colors.append([255, 80, 0, 240] if is_lead else [255, 140, 0, 220])
 
             quat = _yaw_to_quat(obj.yaw_rad)
             quaternions.append(
                 rr.Quaternion(xyzw=[quat[1], quat[2], quat[3], quat[0]])
             )
-            labels.append(f"{obj.object_class} {obj.speed_mps:.1f}m/s")
+            lead_tag = " [LEAD]" if is_lead else ""
+            labels.append(f"{obj.object_class}{lead_tag} {obj.speed_mps:.1f}m/s")
 
         rr.log(
             "world/objects",
@@ -1190,11 +1207,24 @@ class CARLAVisualizer:
         if self._frame % 20 == 0:
             print(msg)
 
+    # FSM state → integer for the scalar time-series panel
+    _FSM_INT = {
+        "lane_follow":          0,
+        "follow_vehicle":       1,
+        "prepare_lane_change":  2,
+        "lane_change":          3,
+        "emergency_stop":       4,
+        "slow_for_crosswalk":   5,
+        "stop_and_go":          6,
+    }
+
     def _log_scalars(
-        self, state: SceneState, speed_profile: SpeedProfile
+        self,
+        state: SceneState,
+        speed_profile: SpeedProfile,
+        planner_out: "PlannerOutput | None" = None,
     ) -> None:
         ego_speed = state.ego_pose.speed_mps
-        # Target speed: first waypoint's target, or 0 if empty profile
         target_speed = (
             speed_profile.target_speeds_mps[0]
             if speed_profile.target_speeds_mps
@@ -1206,8 +1236,18 @@ class CARLAVisualizer:
         rr.log("scalars/target_speed_mps", rr.Scalars(target_speed))
         rr.log("scalars/planner_reason",   rr.Scalars(float(reason_int)))
 
+        if planner_out is not None:
+            fsm_int = self._FSM_INT.get(planner_out.fsm_state, -1)
+            rr.log("scalars/fsm_state", rr.Scalars(float(fsm_int)))
+            rr.log("scalars/acc_speed_mps", rr.Scalars(planner_out.target_speed_mps))
+            if state.lead_vehicle_distance_m >= 0:
+                rr.log("scalars/lead_dist_m", rr.Scalars(state.lead_vehicle_distance_m))
+
     def _log_planner_text(
-        self, state: SceneState, speed_profile: SpeedProfile
+        self,
+        state: SceneState,
+        speed_profile: SpeedProfile,
+        planner_out: "PlannerOutput | None" = None,
     ) -> None:
         nearest_tl = (
             min(state.traffic_lights, key=lambda t: t.distance_m)
@@ -1231,11 +1271,17 @@ class CARLAVisualizer:
             speed_profile.target_speeds_mps[0] * 3.6
             if speed_profile.target_speeds_mps else 0.0
         )
+        fsm_str = f"fsm={planner_out.fsm_state}" if planner_out else ""
+        lead_str = (
+            f"LEAD {state.lead_vehicle_distance_m:.1f}m {state.lead_vehicle_speed_mps*3.6:.1f}km/h"
+            if state.lead_vehicle_id is not None else "LEAD none"
+        )
 
         msg = (
             f"[{self._frame:5d}] {speed_profile.reason:<22s} "
+            f"{fsm_str:<22s} "
             f"spd={spd_kmh:5.1f}km/h tgt={tgt_kmh:5.1f}km/h  "
-            f"{tl_str}  {obj_str}"
+            f"{tl_str}  {obj_str}  {lead_str}"
         )
         rr.log("logs/planner", rr.TextLog(msg, level=rr.TextLogLevel.INFO))
 
@@ -1343,6 +1389,7 @@ def main() -> None:
 
     gt_perception = GTPerception(world, ego_vehicle)
     planner = RuleBasedPlanner(PlannerConfig(cruise_speed_mps=TARGET_SPEED))
+    behaviour_planner = BehaviourPlanner(BehaviourConfig(cruise_speed_mps=TARGET_SPEED))
     viz = CARLAVisualizer(
         world=world,
         carla_map=carla_map,
@@ -1398,6 +1445,13 @@ def main() -> None:
                 time.sleep(_VIZ_DT)
                 continue
 
+            planner_out = None
+            try:
+                planner_out = behaviour_planner.plan(scene_state)
+                planner.config.cruise_speed_mps = planner_out.target_speed_mps
+            except Exception as exc:
+                print(f"[viz] BehaviourPlanner.plan failed: {exc}")
+
             try:
                 speed_profile = planner.plan(scene_state)
             except Exception as exc:
@@ -1405,7 +1459,7 @@ def main() -> None:
                 from planning.planner import SpeedProfile as _SP
                 speed_profile = _SP(target_speeds_mps=[], reason="cruise")
 
-            viz.update(scene_state, speed_profile)
+            viz.update(scene_state, speed_profile, planner_out)
 
             # Honour the target DT (don't drift faster than main.py)
             elapsed = time.monotonic() - loop_start

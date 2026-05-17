@@ -35,6 +35,13 @@ _TL_LOOK_AHEAD_M = 60.0
 _OBJECT_RADIUS_M = 60.0
 _STOP_SIGN_RADIUS_M = 60.0
 _ROUTE_WINDOW = 50   # number of waypoints to include (~50 m at 1 m spacing)
+_LEAD_VEHICLE_SEARCH_M = 40.0
+
+# Phase 4 / Phase 5 constants
+_PED_CONE_HALF_ANGLE_COS = 0.9397  # cos(20°) — pedestrian forward cone half-angle
+_PED_SEARCH_M = 20.0
+_CROSSWALK_SEARCH_M = 30.0
+_STOP_SIGN_AHEAD_M = 30.0
 
 
 class GTPerception:
@@ -67,6 +74,25 @@ class GTPerception:
         stop_signs = self._build_stop_signs(ego_x, ego_y)
         dynamic_objects = self._build_dynamic_objects(ego_x, ego_y)
 
+        # Lead vehicle detection (Phase 2)
+        lead_actor, lead_dist = self._find_lead_vehicle(ego_x, ego_y, yaw_rad)
+        if lead_actor is not None:
+            lead_vel = lead_actor.get_velocity()
+            lead_speed_mps = math.sqrt(lead_vel.x**2 + lead_vel.y**2 + lead_vel.z**2)
+            lead_id = lead_actor.id
+            print(f"[gt_perception] lead_vehicle id={lead_id} dist={lead_dist:.1f}m speed={lead_speed_mps*3.6:.1f}km/h")
+        else:
+            lead_speed_mps = -1.0
+            lead_id = None
+            lead_dist = -1.0
+
+        # Phase 4 — pedestrian + crosswalk
+        ped_in_path = self._pedestrian_in_path(ego_x, ego_y, yaw_rad)
+        crosswalk_ahead, crosswalk_dist = self._find_nearest_crosswalk_ahead(ego_x, ego_y, yaw_rad)
+
+        # Phase 5 — stop sign ahead (uses already-built stop_signs list)
+        ss_ahead, ss_dist = self._stop_sign_ahead(ego_x, ego_y, yaw_rad, stop_signs)
+
         return SceneState(
             timestamp_s=snapshot.timestamp.elapsed_seconds,
             ego_pose=ego_pose,
@@ -75,6 +101,14 @@ class GTPerception:
             traffic_lights=traffic_lights,
             stop_signs=stop_signs,
             dynamic_objects=dynamic_objects,
+            lead_vehicle_id=lead_id,
+            lead_vehicle_distance_m=lead_dist,
+            lead_vehicle_speed_mps=lead_speed_mps,
+            pedestrian_in_path=ped_in_path,
+            crosswalk_ahead=crosswalk_ahead,
+            crosswalk_distance_m=crosswalk_dist,
+            stop_sign_ahead=ss_ahead,
+            stop_sign_distance_m=ss_dist,
             local_map=None,
         )
 
@@ -177,6 +211,175 @@ class GTPerception:
                 )
         results.sort(key=lambda x: x.distance_m)
         return results
+
+    def _find_lead_vehicle(
+        self, ego_x: float, ego_y: float, ego_yaw_rad: float
+    ) -> tuple:
+        """
+        Find the closest vehicle that is:
+          1. In the same lane as ego (road_id + lane_id exact match)
+          2. Ahead of ego (dot product with forward vector > 0)
+          3. Within _LEAD_VEHICLE_SEARCH_M
+
+        Returns (actor, distance_m) or (None, -1.0).
+
+        CARLA coordinate notes:
+          - Left-handed Z-up. X=forward, Y=right, Z=up.
+          - Forward vector: (cos(yaw_rad), sin(yaw_rad)) — no sign flip.
+          - Yaw clockwise: yaw=0→+X, yaw=90°→+Y(right).
+          - lane_id sign encodes direction: same value = same lane + same direction.
+        """
+        ego_loc = carla.Location(x=ego_x, y=ego_y)
+        try:
+            ego_wp = self._map.get_waypoint(
+                ego_loc, project_to_road=True, lane_type=carla.LaneType.Driving
+            )
+        except Exception:
+            return None, -1.0
+        if ego_wp is None:
+            return None, -1.0
+
+        ego_road_id = ego_wp.road_id
+        ego_lane_id = ego_wp.lane_id
+
+        # Forward vector in CARLA left-handed space — no Y negation
+        fwd_x = math.cos(ego_yaw_rad)
+        fwd_y = math.sin(ego_yaw_rad)
+
+        best_actor = None
+        best_dist = float("inf")
+
+        for actor in self._world.get_actors().filter("vehicle.*"):
+            if actor.id == self._ego.id:
+                continue
+
+            loc = actor.get_location()
+            dist = math.hypot(ego_x - loc.x, ego_y - loc.y)
+            if dist > _LEAD_VEHICLE_SEARCH_M:
+                continue
+
+            # Lane membership: same road + same lane_id (sign encodes direction)
+            try:
+                actor_wp = self._map.get_waypoint(
+                    loc, project_to_road=True, lane_type=carla.LaneType.Driving
+                )
+            except Exception:
+                continue
+            if actor_wp is None:
+                continue
+            if actor_wp.road_id != ego_road_id or actor_wp.lane_id != ego_lane_id:
+                continue
+
+            # Ahead check via dot product in CARLA space (no Y negation)
+            dx = loc.x - ego_x
+            dy = loc.y - ego_y
+            dot = dx * fwd_x + dy * fwd_y
+            if dot <= 0.0:
+                continue  # behind or at same position
+
+            if dist < best_dist:
+                best_dist = dist
+                best_actor = actor
+
+        if best_actor is None:
+            return None, -1.0
+        return best_actor, best_dist
+
+    def _pedestrian_in_path(
+        self, ego_x: float, ego_y: float, ego_yaw_rad: float
+    ) -> bool:
+        """
+        Phase 4: Return True if any pedestrian is within _PED_SEARCH_M and inside
+        a ±30° forward cone.
+
+        CARLA left-handed Z-up: forward = (cos(yaw), sin(yaw)), no Y negation.
+        """
+        fwd_x = math.cos(ego_yaw_rad)
+        fwd_y = math.sin(ego_yaw_rad)
+
+        for actor in self._world.get_actors().filter("walker.pedestrian.*"):
+            loc = actor.get_location()
+            dx = loc.x - ego_x
+            dy = loc.y - ego_y
+            dist = math.hypot(dx, dy)
+            if dist > _PED_SEARCH_M or dist < 1e-3:
+                continue
+            dot = dx * fwd_x + dy * fwd_y
+            # Ahead AND within cone: dot/dist > cos(30°)
+            if dot > 0.0 and (dot / dist) > _PED_CONE_HALF_ANGLE_COS:
+                print(f"[gt_perception] pedestrian_in_path id={actor.id} dist={dist:.1f}m")
+                return True
+        return False
+
+    def _find_nearest_crosswalk_ahead(
+        self, ego_x: float, ego_y: float, ego_yaw_rad: float
+    ) -> tuple[bool, float]:
+        """
+        Phase 4: Scan crosswalk polygon vertices from map.get_crosswalks().
+        Returns (True, min_dist_m) if any vertex is ahead and within _CROSSWALK_SEARCH_M,
+        else (False, -1.0).
+
+        CARLA left-handed Z-up: forward = (cos(yaw), sin(yaw)), no Y negation.
+        """
+        fwd_x = math.cos(ego_yaw_rad)
+        fwd_y = math.sin(ego_yaw_rad)
+
+        try:
+            vertices = self._map.get_crosswalks()
+        except Exception:
+            return False, -1.0
+
+        min_dist = float("inf")
+        found = False
+
+        for loc in vertices:
+            dx = loc.x - ego_x
+            dy = loc.y - ego_y
+            dist = math.hypot(dx, dy)
+            if dist > _CROSSWALK_SEARCH_M or dist < 1e-3:
+                continue
+            dot = dx * fwd_x + dy * fwd_y
+            if dot > 0.0 and dist < min_dist:
+                min_dist = dist
+                found = True
+
+        if found:
+            print(f"[gt_perception] crosswalk_ahead dist={min_dist:.1f}m")
+            return True, min_dist
+        return False, -1.0
+
+    def _stop_sign_ahead(
+        self,
+        ego_x: float,
+        ego_y: float,
+        ego_yaw_rad: float,
+        stop_signs: list[StopSignInfo],
+    ) -> tuple[bool, float]:
+        """
+        Phase 5: From the already-built stop_signs list, find the nearest sign
+        that is ahead of ego and within _STOP_SIGN_AHEAD_M.
+
+        CARLA left-handed Z-up: forward = (cos(yaw), sin(yaw)), no Y negation.
+        """
+        fwd_x = math.cos(ego_yaw_rad)
+        fwd_y = math.sin(ego_yaw_rad)
+
+        best_dist = float("inf")
+        found = False
+
+        for sign in stop_signs:
+            if sign.distance_m > _STOP_SIGN_AHEAD_M:
+                continue
+            dx = sign.location_x - ego_x
+            dy = sign.location_y - ego_y
+            dot = dx * fwd_x + dy * fwd_y
+            if dot > 0.0 and sign.distance_m < best_dist:
+                best_dist = sign.distance_m
+                found = True
+
+        if found:
+            return True, best_dist
+        return False, -1.0
 
     def _build_dynamic_objects(
         self, ego_x: float, ego_y: float

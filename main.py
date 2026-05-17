@@ -1,3 +1,4 @@
+import argparse
 import math
 
 from utils import carla_bootstrap  # noqa: F401  (sys.path side effect for `agents.*`)
@@ -6,6 +7,10 @@ import carla
 
 import config
 from control.pid_controller import PIDController
+from extras.scenes import SCENES, SceneSpawner
+from planning.behaviour_planner import BehaviourPlanner, BehaviourConfig
+from planning.lane_aware_waypoint_manager import LaneAwareWaypointManager
+from planning.planner_output import PlannerOutput
 from planning.route_planner import RoutePlanner
 from planning.waypoint_manager import WaypointManager
 from utils.carla_utils import (
@@ -21,18 +26,47 @@ from perception.gt_perception import GTPerception
 from planning.planner import RuleBasedPlanner, PlannerConfig
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="AutonomousCar — CARLA AV stack")
+    parser.add_argument(
+        "--scene",
+        default="test_lane_follow",
+        choices=list(SCENES.keys()),
+        help="NPC scene to load for testing (default: test_lane_follow)",
+    )
+    parser.add_argument(
+        "--start", type=int, default=None,
+        help="Override START_SPAWN_IDX from config.py",
+    )
+    parser.add_argument(
+        "--end", type=int, default=None,
+        help="Override END_SPAWN_IDX from config.py",
+    )
+    parser.add_argument(
+        "--town", default=None,
+        help="Override TOWN from config.py (e.g. Town02)",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     client = carla.Client("localhost", 2000)
     client.set_timeout(10.0)
 
+    town = args.town if args.town is not None else config.TOWN
     av = AutonomousVehicle(client)
-    world, carla_map = av.spawn_world(config.TOWN)
+    world, carla_map = av.spawn_world(town)
     vehicle = av.spawn_vehicle(config.VEHICLE_MODEL)
     av.equip_sensors()
 
     spawn_points = carla_map.get_spawn_points()
-    start_loc = spawn_points[config.START_SPAWN_IDX].location
-    end_loc = spawn_points[config.END_SPAWN_IDX].location
+    start_idx = args.start if args.start is not None else config.START_SPAWN_IDX
+    end_idx   = args.end   if args.end   is not None else config.END_SPAWN_IDX
+    start_loc = spawn_points[start_idx].location
+    end_loc   = spawn_points[end_idx].location
+    print(f"Route: spawn[{start_idx}] → spawn[{end_idx}]")
 
     route_planner = RoutePlanner(carla_map, config.ROUTE_SAMPLING_RESOLUTION_M)
     route = route_planner.compute(start_loc, end_loc)
@@ -41,15 +75,21 @@ def main():
         f"(spawn[{config.START_SPAWN_IDX}] -> spawn[{config.END_SPAWN_IDX}])"
     )
 
-    waypoint_manager = WaypointManager(
+    # Spawn scene NPCs before entering synchronous mode
+    scene_spawner = SceneSpawner(client, world, carla_map, route, start_idx=0)
+    npc_actors = scene_spawner.spawn(SCENES[args.scene])
+
+    _wm = WaypointManager(
         route,
         target_speed=config.TARGET_SPEED,
         search_window=config.WAYPOINT_SEARCH_WINDOW,
         slow_down_dist_m=config.SLOW_DOWN_DIST_M,
         slow_down_floor_speed=config.SLOW_DOWN_FLOOR_SPEED,
     )
+    waypoint_manager = LaneAwareWaypointManager(_wm)
 
     gt_perception = GTPerception(world, vehicle)
+    behaviour_planner = BehaviourPlanner(BehaviourConfig(cruise_speed_mps=config.TARGET_SPEED))
     planner = RuleBasedPlanner(PlannerConfig(cruise_speed_mps=config.TARGET_SPEED))
 
     lateral_pid = PIDController(
@@ -72,6 +112,15 @@ def main():
                 ego = get_ego_state(vehicle)
                 waypoint_manager.update(ego.x, ego.y)
                 scene_state = gt_perception.update(full_route=route, current_idx=waypoint_manager.current_idx)
+
+                # Behaviour layer: FSM decisions + ACC target speed
+                planner_out = behaviour_planner.plan(scene_state)
+                waypoint_manager.set_lane_offset(planner_out.target_lane_offset)
+
+                # Wire ACC target speed into the safety planner's cruise
+                planner.config.cruise_speed_mps = planner_out.target_speed_mps
+
+                # Safety layer: always runs, may lower speed further
                 speed_profile = planner.plan(scene_state)
                 waypoint_manager.set_speed_profile(speed_profile)
 
@@ -113,10 +162,15 @@ def main():
                         f"OBJ {nearest_obj.object_class} {nearest_obj.distance_m:.1f}m"
                         if nearest_obj else "OBJ none"
                     )
+                    lead_str = (
+                        f"LEAD {scene_state.lead_vehicle_distance_m:.1f}m {scene_state.lead_vehicle_speed_mps*3.6:.1f}km/h"
+                        if scene_state.lead_vehicle_id is not None else "LEAD none"
+                    )
                     print(
                         f"[{logger._frame:5d}] {speed_profile.reason:<22s} "
+                        f"fsm={planner_out.fsm_state:<16s} "
                         f"spd={ego.speed*3.6:5.1f}km/h tgt={target_speed*3.6:5.1f}km/h "
-                        f"wp={waypoint_manager.current_idx:4d}  {tl_str}  {obj_str}"
+                        f"wp={waypoint_manager.current_idx:4d}  {tl_str}  {obj_str}  {lead_str}"
                     )
 
                 draw_next_waypoints(
@@ -154,6 +208,7 @@ def main():
             )
     finally:
         logger.close()
+        scene_spawner.destroy()
         for sensor in av.sensors.values():
             if sensor is not None and sensor.is_alive:
                 sensor.destroy()

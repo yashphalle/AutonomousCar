@@ -81,4 +81,14 @@ class SceneState:
     traffic_lights: list[TrafficLightInfo] = field(default_factory=list)
     stop_signs: list[StopSignInfo] = field(default_factory=list)
     dynamic_objects: list[DetectedObject] = field(default_factory=list)
+    lead_vehicle_id: int | None = None
+    lead_vehicle_distance_m: float = -1.0    # -1.0 means no lead vehicle detected
+    lead_vehicle_speed_mps: float = -1.0     # -1.0 means no lead vehicle detected
+    # Phase 4 — Pedestrian + Crosswalk
+    pedestrian_in_path: bool = False           # ped in ±30° forward cone, within 20 m
+    crosswalk_ahead: bool = False              # crosswalk on ego's route within 25 m
+    crosswalk_distance_m: float = -1.0         # distance to nearest crosswalk ahead (-1 = none)
+    # Phase 5 — Stop sign
+    stop_sign_ahead: bool = False              # stop sign ahead within 30 m
+    stop_sign_distance_m: float = -1.0         # distance to nearest stop sign ahead (-1 = none)
     local_map: OccupancyGrid | None = None
