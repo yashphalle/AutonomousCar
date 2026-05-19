@@ -4,7 +4,7 @@ Rerun-based visualizer for the CARLA autonomous vehicle stack.
 Runs standalone alongside a live main.py session:
   Terminal 1: ./CarlaUE4.sh
   Terminal 2: python3.10 main.py
-  Terminal 3: python3.10 extras/viz.py [--host localhost] [--port 2000] [--save out.rrd]
+  Terminal 3: python3.10 viz.py [--host localhost] [--port 2000] [--save out.rrd]
 
 """
 

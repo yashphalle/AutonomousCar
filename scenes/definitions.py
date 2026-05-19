@@ -3,17 +3,6 @@ Scene definitions — NPC layouts for testing behaviour planning phases.
 
 Usage:
     python3.10 main.py --scene <name>
-
-Each NPCSpec is placed relative to ego's start position along the route.
-route_offset_m > 0 = ahead, < 0 = behind.
-lateral_offset_m > 0 = left of lane centre, < 0 = right.
-
-NOTE on stop signs:
-    Stop signs are CARLA map fixtures — they cannot be spawned via this file.
-    Town01 spawn[0]→spawn[50] may not have stop signs on the route.
-    Use the 'stop_sign_sim' scene which places a stationary blocker to
-    exercise the stop-and-hold behaviour, or change the route in config.py
-    to one that passes through a stop-sign intersection.
 """
 from __future__ import annotations
 
@@ -126,7 +115,7 @@ SCENES: dict[str, SceneConfig] = {
     #   ~130 m    : ped crossing      → emergency_stop (brief) → resume
     #
     # Stop sign depends on map — will engage if route passes one.
-    # Run with viz for full picture: python3.10 extras/viz.py in a second terminal.
+    # Run with viz for full picture: python3.10 viz.py in a second terminal.
     "test_gauntlet": SceneConfig(
         name="test_gauntlet",
         description="[TEST ALL] Full scenario: lane follow → ACC → ped block → ped crossing",
@@ -140,6 +129,37 @@ SCENES: dict[str, SceneConfig] = {
             NPCSpec(route_offset_m=130.0, lateral_offset_m=3.5,
                     target_speed_mps=1.2, is_pedestrian=True,
                     walk_to_lateral_m=-3.5, label="ped_cross"),
+        ],
+    ),
+
+    # ── TOWN04 MULTI-LANE ────────────────────────────────────────────────────
+    # Town04 has wide multi-lane roads (4 driving lanes). spawn[0]->spawn[67]
+    # is a 256m fully-multilane route from the rightmost lane.
+    # Run:
+    #   python3.10 main.py --town Town04 --start 0 --end 67 --scene test_town04_multilane
+    # Validates on a multi-lane road:
+    #   - lane_follow stays in lane (no drift across lanes)
+    #   - ACC engages on in-lane lead (follow_vehicle)
+    #   - adjacent-lane car does NOT trigger ACC (lead filter is lane-aware)
+    #   - emergency_stop fires on ped blocking the path
+    "test_town04_multilane": SceneConfig(
+        name="test_town04_multilane",
+        description="[TOWN04] Multi-lane: in-lane lead + adjacent-lane decoy (highway, no peds)",
+        npcs=[
+            # In-lane slow lead → triggers ACC
+            NPCSpec(route_offset_m=30.0, lateral_offset_m=0.0,
+                    target_speed_mps=3.5, label="lead_in_lane"),
+            # Adjacent lane decoy. Town04 spawn[0] is on lane_id=-4 with the
+            # three adjacent driving lanes to the LEFT (lane_id=-3,-2,-1).
+            # The spawner's lateral shift uses perp = heading + π/2;
+            # empirically lateral_offset_m=-3.5 lands in lane -3 (adjacent),
+            # +3.5 goes off-road and the spawner silently falls back to ego's
+            # lane — so the sign matters.
+            NPCSpec(route_offset_m=20.0, lateral_offset_m=-3.5,
+                    target_speed_mps=3.0, label="decoy_adjacent"),
+            # Pedestrians are intentionally omitted on Town04: the highway map
+            # has no walker NavMesh near these spawn points, which segfaults
+            # the walker AI controller.
         ],
     ),
 

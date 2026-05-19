@@ -14,7 +14,7 @@ import random
 
 import carla
 
-from extras.scenes.definitions import NPCSpec, SceneConfig
+from scenes.definitions import NPCSpec, SceneConfig
 
 
 class SceneSpawner:

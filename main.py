@@ -7,7 +7,7 @@ import carla
 
 import config
 from control.pid_controller import PIDController
-from extras.scenes import SCENES, SceneSpawner
+from scenes import SCENES, SceneSpawner
 from planning.behaviour_planner import BehaviourPlanner, BehaviourConfig
 from planning.lane_aware_waypoint_manager import LaneAwareWaypointManager
 from planning.planner_output import PlannerOutput
@@ -53,7 +53,7 @@ def main():
     args = parse_args()
 
     client = carla.Client("localhost", 2000)
-    client.set_timeout(10.0)
+    client.set_timeout(30.0)
 
     town = args.town if args.town is not None else config.TOWN
     av = AutonomousVehicle(client)

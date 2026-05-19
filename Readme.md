@@ -5,26 +5,88 @@ Documenting my project journey here:
 [**Building an Autonomous Vehicle Block by Block**](https://medium.com/@yashphalle/building-an-autonomous-vehicle-block-by-block-d7128d564094)
 
 
+## Progress
+
+| Part | Title | Key Result |
+|---|---|---|
+| Part 1 | CARLA Setup & Sensor Suite | `AutonomousVehicle` class, 7-camera + LiDAR rig, real-time feed |
+| Part 2 | Teaching the Car to See Traffic Lights | YOLOv11 detector, mAP50 = 0.76, precision = 0.89, free auto-labeling pipeline |
+| Part 3 | Building the Control Stack | Two-loop PID controller, speed-scaled lookahead, stable route following to 50 km/h |
+| Part 4 | Teaching the Car to Take Decisions | Rule-based planner with `SceneState` architecture — 0 collisions, 0 red-light violations |
+| Part 5 | Seeing What the Car Sees | Real-time Rerun visualizer — 3D world view, BEV, live speed + planner-rule time-series |
+
+**Up next:** Extending the behaviour planner — Town03 stop-sign validation, full gauntlet runs, and Phase 3 lane change on multi-lane maps. Perception swap is deferred until the very end of the project (we may use the CARLA GT API as an annotation source for a learned model, or skip modular perception entirely in favour of end-to-end neural nets).
+
+
+## Demos
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://www.youtube.com/watch?v=Zp2v0woXDkI"><img src="https://img.youtube.com/vi/Zp2v0woXDkI/hqdefault.jpg" width="400" alt="Camera + LiDAR + Controls"></a><br>
+      <b>Part 1 - CARLA Setup & Sensor Suite</b><br>
+      <sub>Basic vehicle controls + multi-camera and LiDAR feed</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://medium.com/@yashphalle/teaching-the-car-to-see-traffic-lights-building-an-av-block-by-block-part-2-c6166d894c27"><img src="media/yolo_traffic_lights.png" width="400" alt="YOLO Traffic Lights"></a><br>
+      <b>Part 2 - Teaching the Car to See Traffic Lights</b><br>
+      <sub>YOLOv11 detector + auto-labeling pipeline</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/kcWt94IUlJI"><img src="https://img.youtube.com/vi/kcWt94IUlJI/hqdefault.jpg" width="400" alt="PID Waypoint Follower"></a><br>
+      <b>Part 3 - PID Waypoint Follower</b><br>
+      <sub>Lateral + longitudinal PID, stable to 50 km/h</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/axbufiYNJZU"><img src="https://img.youtube.com/vi/axbufiYNJZU/hqdefault.jpg" width="400" alt="Rule-Based Planner"></a><br>
+      <b>Part 4 - Rule-Based Planner</b><br>
+      <sub>SceneState + planner running autonomous routes</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <a href="https://youtu.be/GMCpoKJ3ty0"><img src="https://img.youtube.com/vi/GMCpoKJ3ty0/hqdefault.jpg" width="400" alt="BEV Visualizer"></a><br>
+      <b>Part 5 - BEV Visualizer</b><br>
+      <sub>Real-time Rerun visualizer with ego-centric BEV</sub>
+    </td>
+  </tr>
+</table>
+
 ## Repository Structure
 
 ```
 AutonomousCar/
-├── main.py                 # Entry point: spawns ego, plans route, runs PID control loop
+├── main.py                 # Entry point: wires perception → behaviour → planner → control
 ├── config.py               # Central tunables: town, vehicle, route, speed, PID gains
 │
 ├── vehicle/
 │   └── autonomous_vehicle.py   # AutonomousVehicle: connect to CARLA, spawn ego, attach sensors
 │
+├── perception/
+│   ├── scene_state.py          # Dataclass contract between perception and planning (no CARLA)
+│   └── gt_perception.py        # Reads CARLA ground truth → writes SceneState
+│
 ├── planning/
-│   ├── route_planner.py        # Wraps CARLA's GlobalRoutePlanner
-│   └── waypoint_manager.py     # Tracks current target waypoint, handles slow-down near goal
+│   ├── route_planner.py            # Wraps CARLA's GlobalRoutePlanner (A* route)
+│   ├── waypoint_manager.py         # Tracks current target waypoint, slowdown near goal
+│   ├── lane_aware_waypoint_manager.py  # Lane-aware variant used by the behaviour planner
+│   ├── behaviour_planner.py        # FSM behaviour layer: SceneState → PlannerOutput
+│   ├── planner_output.py           # PlannerOutput dataclass (target speed + behaviour state)
+│   └── planner.py                  # Rule-based safety planner: SceneState → SpeedProfile
 │
 ├── control/
 │   └── pid_controller.py       # PID (used for both steering and longitudinal control)
 │
+├── eval/
+│   ├── run_eval.py             # Synchronous seeded harness — runs all routes, writes CSV
+│   ├── routes.py               # 10 Town01 evaluation routes
+│   └── results/                # Baseline CSVs + per-route summaries
+│
 ├── utils/
 │   ├── carla_bootstrap.py      # Locates CARLA install and adds PythonAPI to sys.path
-│   ├── carla_utils.py          # Ego state, angle normalization, throttle/brake mapping, HUD helpers
+│   ├── carla_utils.py          # Ego state, angle normalization, throttle/brake mapping
 │   └── run_logger.py           # Per-frame CSV logger for offline analysis
 │
 ├── cv_training/
@@ -35,10 +97,13 @@ AutonomousCar/
 │       ├── yolo_model.py               # YOLO inference wrapper
 │       └── autolabel_traffic_signals.py # Bulk autolabeler → YOLO + Label Studio JSON
 │
-├── extras/                 # Standalone scripts (not part of main loop)
-│   ├── camera_feed.py              # Multi-camera + LiDAR top-down visualizer
-│   ├── car_control.py              # Minimal manual drive script
-│   └── collect_traffic_light_data.py # Dataset collection for CV training
+├── viz.py                  # Rerun BEV live visualizer (lanes, traffic lights, signs)
+│
+├── scenes/
+│   ├── definitions.py          # Named test scenes (stop sign, junctions, gauntlet, etc.)
+│   └── spawner.py              # Spawns NPCs / actors for a given scene
+│
+├── extras/                 # Standalone helper scripts (manual drive, dataset collection, plots)
 │
 └── logs/                   # Run CSVs written by RunLogger
 ```
@@ -89,4 +154,4 @@ python main.py
 ```
 
 
-> 🤖⚡**Claude Code** has been greatly accelerating the development of this project!
+> 🤖⚡**Claude Code - Multi Agent setup** has been greatly accelerating the development of this project!

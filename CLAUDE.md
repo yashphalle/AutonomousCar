@@ -11,11 +11,12 @@ Python 3.10 · CARLA 0.9.16 · Town01
 |---|---|---|
 | **1 — Vehicle / Sensor scaffolding** | ✅ Complete | `vehicle/autonomous_vehicle.py`, `main.py`, `control/`, `planning/route_planner.py`, `planning/waypoint_manager.py` |
 | **2 — SceneState + GT perception + rule-based planner** | ✅ Complete | `perception/`, `planning/planner.py`, `eval/` |
+| **2b — Behaviour planning (FSM)** | ✅ Complete | `planning/behaviour_planner.py`, `planning/planner_output.py`, `planning/lane_aware_waypoint_manager.py`, `scenes/` |
 | **3a — Localization** | ⬜ Not started | — |
 | **3b — Learned perception (YOLO TL)** | 🟡 Early | `cv_training/` |
 | **4 — Full integration** | ⬜ Not started | — |
 
-**Current focus: Stage 3b** — replace GT traffic light state with YOLO classifier output.
+**Current focus: behaviour planner extensions.** Perception swap (Stage 3b) is deferred until the very end — at that point we may either use GT as annotation for a learned model, or skip modular perception and try end-to-end neural nets.
 
 ---
 
@@ -42,7 +43,27 @@ Python 3.10 · CARLA 0.9.16 · Town01
 
 6. **Config lives in `config.py`.** Never scatter constants across files.
 
-7. **Always add a debug/log line when implementing a new feature.** Use `print(f"[tag] ...")` for planner decisions, `RunLogger` for per-frame CSV metrics.
+7. **CARLA coordinate system — left-handed Z-up:**
+   - Forward vector: `fwd_x = cos(yaw_rad)`, `fwd_y = sin(yaw_rad)` — **NO Y negation**.
+   - "Ahead" check: `dot = dx * fwd_x + dy * fwd_y > 0`.
+   - Y negation is **only** for Rerun visualisation output, never for geometry calculations.
+   - Recurring bug: applying Y negation in geometry causes vehicles in adjacent lanes to appear as lead vehicles on curves.
+
+9. **Behaviour planner feeds the safety planner — safety always wins:**
+   ```python
+   planner_out = behaviour_planner.plan(scene_state)        # judgment layer
+   planner.config.cruise_speed_mps = planner_out.target_speed_mps  # ACC ceiling
+   speed_profile = planner.plan(scene_state)                # safety layer runs on top
+   ```
+   The behaviour planner sets a desired cruise speed; the safety planner may lower it further (red light, emergency brake). Never the reverse.
+
+10. **CARLA API gotcha — Traffic Manager is on the client:**
+    ```python
+    tm = client.get_trafficmanager()   # CORRECT for CARLA 0.9.16
+    # world.get_trafficmanager()       # AttributeError — does not exist
+    ```
+
+11. **Always add a debug/log line when implementing a new feature.** Use `print(f"[tag] ...")` for planner decisions, `RunLogger` for per-frame CSV metrics.
 
 ---
 
@@ -56,6 +77,7 @@ Each agent owns its file(s) — do not have agents edit files outside their owne
 | SceneState Architect | `scene-state-architect` | `perception/scene_state.py` | Dataclass contract only. No logic, no CARLA imports. |
 | GT Perception Engineer | `gt-perception-engineer` | `perception/gt_perception.py` | Reads CARLA ground truth → writes `SceneState`. All unit conversions live here. |
 | Planner Engineer | `planner-engineer` | `planning/planner.py` | Rule-based planner: reads `SceneState` → outputs `SpeedProfile`. Never imports `carla`. |
+| Behaviour Planner Engineer | `behaviour-planner-engineer` | `planning/behaviour_planner.py`, `planning/planner_output.py`, `planning/lane_aware_waypoint_manager.py` | FSM-based behaviour planner: reads `SceneState` → outputs `PlannerOutput`. Never imports `carla`. |
 | Eval Engineer | `eval-engineer` | `eval/run_eval.py`, `eval/routes.py` | Synchronous seeded harness, per-route metrics, CSV + summary output. |
 | Explorer | `Explore` | — | Fast read-only codebase search. Use for "where is X defined?" queries. |
 | Planner | `Plan` | — | Architecture design before implementation. Use before any non-trivial change. |
