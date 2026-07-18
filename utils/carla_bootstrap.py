@@ -1,5 +1,4 @@
-
-
+#script for bootstrapping CARLA imports without pip install. Should be imported before carla to ensure the .egg/.whl is on sys.path.
 import glob
 import os
 import sys

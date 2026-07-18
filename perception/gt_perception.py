@@ -43,6 +43,10 @@ _PED_SEARCH_M = 20.0
 _CROSSWALK_SEARCH_M = 30.0
 _STOP_SIGN_AHEAD_M = 30.0
 
+# Phase 3 — lane change clear-zone constants
+_LC_LOOK_AHEAD_M  = 40.0   # clear zone ahead for lane change
+_LC_LOOK_BEHIND_M =  5.0   # clear zone behind for lane change
+
 
 class GTPerception:
     def __init__(self, world, vehicle):
@@ -93,6 +97,11 @@ class GTPerception:
         # Phase 5 — stop sign ahead (uses already-built stop_signs list)
         ss_ahead, ss_dist = self._stop_sign_ahead(ego_x, ego_y, yaw_rad, stop_signs)
 
+        # Phase 3 — adjacent lane clearance for lane change
+        left_avail, left_clear, right_avail, right_clear = self._check_adjacent_lanes(
+            ego_x, ego_y, yaw_rad
+        )
+
         return SceneState(
             timestamp_s=snapshot.timestamp.elapsed_seconds,
             ego_pose=ego_pose,
@@ -109,6 +118,10 @@ class GTPerception:
             crosswalk_distance_m=crosswalk_dist,
             stop_sign_ahead=ss_ahead,
             stop_sign_distance_m=ss_dist,
+            left_lane_available=left_avail,
+            left_lane_clear=left_clear,
+            right_lane_available=right_avail,
+            right_lane_clear=right_clear,
             local_map=None,
         )
 
@@ -380,6 +393,115 @@ class GTPerception:
         if found:
             return True, best_dist
         return False, -1.0
+
+    def _check_adjacent_lanes(
+        self, ego_x: float, ego_y: float, ego_yaw_rad: float
+    ) -> tuple[bool, bool, bool, bool]:
+        """
+        Phase 3: check left and right adjacent lanes for availability and clearance.
+        Returns (left_available, left_clear, right_available, right_clear).
+
+        'available' = a drivable same-direction lane exists AND map permits the lane change.
+        'clear'     = no vehicles within _LC_LOOK_AHEAD_M ahead or _LC_LOOK_BEHIND_M behind.
+        """
+        try:
+            ego_wp = self._map.get_waypoint(
+                carla.Location(x=ego_x, y=ego_y),
+                project_to_road=True,
+                lane_type=carla.LaneType.Driving,
+            )
+        except Exception:
+            return False, False, False, False
+        if ego_wp is None:
+            return False, False, False, False
+
+        lc_flag = ego_wp.lane_change
+        left_permitted  = lc_flag in (carla.LaneChange.Left,  carla.LaneChange.Both)
+        right_permitted = lc_flag in (carla.LaneChange.Right, carla.LaneChange.Both)
+
+        left_avail, left_clear = (
+            self._check_one_lane(ego_wp, ego_wp.get_left_lane(), ego_x, ego_y, ego_yaw_rad)
+            if left_permitted else (False, False)
+        )
+        right_avail, right_clear = (
+            self._check_one_lane(ego_wp, ego_wp.get_right_lane(), ego_x, ego_y, ego_yaw_rad)
+            if right_permitted else (False, False)
+        )
+
+        if left_avail or right_avail:
+            print(
+                f"[gt_perception] adj_lanes  left={'avail' if left_avail else 'none'}"
+                f"{'(clear)' if left_clear else '(blocked)' if left_avail else ''}"
+                f"  right={'avail' if right_avail else 'none'}"
+                f"{'(clear)' if right_clear else '(blocked)' if right_avail else ''}"
+            )
+
+        return left_avail, left_clear, right_avail, right_clear
+
+    def _check_one_lane(
+        self,
+        ego_wp,
+        adj_wp,
+        ego_x: float,
+        ego_y: float,
+        ego_yaw_rad: float,
+    ) -> tuple[bool, bool]:
+        """
+        Returns (available, clear) for one adjacent lane.
+
+        Guards (all must pass for 'available'):
+          1. adj_wp exists
+          2. lane_type == Driving
+          3. Same direction as ego (lane_id sign matches — opposite sign = oncoming traffic)
+          4. Lane change already confirmed permitted by caller
+
+        'clear' = no vehicles in that lane within _LC_LOOK_AHEAD_M ahead
+                  or _LC_LOOK_BEHIND_M behind ego.
+
+        CARLA coordinate system: left-handed Z-up.
+        Forward vector: (cos(yaw_rad), sin(yaw_rad)) — NO Y negation.
+        dot > 0 means ahead, dot < 0 means behind.
+        """
+        if adj_wp is None:
+            return False, False
+        if adj_wp.lane_type != carla.LaneType.Driving:
+            return False, False
+        # Same sign of lane_id = same traffic direction. Opposite sign = oncoming.
+        if adj_wp.lane_id * ego_wp.lane_id < 0:
+            return False, False
+
+        adj_road_id = adj_wp.road_id
+        adj_lane_id = adj_wp.lane_id
+        fwd_x = math.cos(ego_yaw_rad)
+        fwd_y = math.sin(ego_yaw_rad)
+
+        for actor in self._world.get_actors().filter("vehicle.*"):
+            if actor.id == self._ego.id:
+                continue
+            loc = actor.get_location()
+            dist = math.hypot(ego_x - loc.x, ego_y - loc.y)
+            if dist > _LC_LOOK_AHEAD_M + _LC_LOOK_BEHIND_M:
+                continue
+            try:
+                actor_wp = self._map.get_waypoint(
+                    loc, project_to_road=True, lane_type=carla.LaneType.Driving
+                )
+            except Exception:
+                continue
+            if actor_wp is None:
+                continue
+            if actor_wp.road_id != adj_road_id or actor_wp.lane_id != adj_lane_id:
+                continue
+            # Vehicle is in adjacent lane — check longitudinal window
+            dx = loc.x - ego_x
+            dy = loc.y - ego_y
+            dot = dx * fwd_x + dy * fwd_y
+            ahead  = dot > 0 and dot < _LC_LOOK_AHEAD_M
+            behind = dot <= 0 and abs(dot) < _LC_LOOK_BEHIND_M
+            if ahead or behind:
+                return True, False   # lane exists but is occupied
+
+        return True, True   # lane exists and is clear
 
     def _build_dynamic_objects(
         self, ego_x: float, ego_y: float

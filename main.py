@@ -1,10 +1,7 @@
 import argparse
 import math
-
-from utils import carla_bootstrap  # noqa: F401  (sys.path side effect for `agents.*`)
-
+from utils import carla_bootstrap 
 import carla
-
 import config
 from control.pid_controller import PIDController
 from scenes import SCENES, SceneSpawner
@@ -111,6 +108,7 @@ def main():
 
                 ego = get_ego_state(vehicle)
                 waypoint_manager.update(ego.x, ego.y)
+                #this will be swapped out with perception module
                 scene_state = gt_perception.update(full_route=route, current_idx=waypoint_manager.current_idx)
 
                 # Behaviour layer: FSM decisions + ACC target speed

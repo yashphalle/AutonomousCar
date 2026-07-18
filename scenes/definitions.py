@@ -163,6 +163,32 @@ SCENES: dict[str, SceneConfig] = {
         ],
     ),
 
+    # ── LANE CHANGE (Phase 3) ────────────────────────────────────────────────
+    # Needs a multi-lane map: Town04 or Town06.
+    # Run: python3.10 main.py --town Town04 --start 0 --end 67 --scene test_lane_change
+    #
+    # Happy path: slow lead → ego stuck 5s → left lane clear → lane change executes.
+    # Expected FSM: lane_follow → follow_vehicle → prepare_lane_change → lane_change → lane_follow
+    "test_lane_change": SceneConfig(
+        name="test_lane_change",
+        description="[TEST LC] Slow lead 20m ahead, left lane empty — should trigger lane change after 5s",
+        npcs=[
+            NPCSpec(route_offset_m=20.0, target_speed_mps=2.0, label="lead_slow"),
+        ],
+    ),
+
+    # Negative: slow lead but left lane blocked → must stay in follow_vehicle, no lane change.
+    "test_lane_change_blocked": SceneConfig(
+        name="test_lane_change_blocked",
+        description="[TEST LC NEG] Slow lead + vehicle in left lane — must NOT lane change",
+        npcs=[
+            NPCSpec(route_offset_m=20.0, lateral_offset_m=0.0,
+                    target_speed_mps=2.0, label="lead_slow"),
+            NPCSpec(route_offset_m=10.0, lateral_offset_m=-3.5,
+                    target_speed_mps=6.0, label="left_lane_blocker"),
+        ],
+    ),
+
     # ── REGRESSION / NEGATIVE TESTS ─────────────────────────────────────────
     # Car behind ego: must NOT trigger follow_vehicle.
     "test_neg_vehicle_behind": SceneConfig(

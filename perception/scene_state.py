@@ -91,4 +91,9 @@ class SceneState:
     # Phase 5 — Stop sign
     stop_sign_ahead: bool = False              # stop sign ahead within 30 m
     stop_sign_distance_m: float = -1.0         # distance to nearest stop sign ahead (-1 = none)
+    # Phase 3 — Lane change
+    left_lane_available: bool = False    # drivable left lane exists at ego's position (map permits LC left)
+    left_lane_clear: bool = False        # no vehicles in left lane within 40m ahead / 5m behind
+    right_lane_available: bool = False   # drivable right lane exists at ego's position (map permits LC right)
+    right_lane_clear: bool = False       # no vehicles in right lane within 40m ahead / 5m behind
     local_map: OccupancyGrid | None = None
